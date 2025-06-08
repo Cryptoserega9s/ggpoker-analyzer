@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 // --- НОВОЕ: Импортируем наше хранилище Zustand ---
 import { useUserStore } from '../store/userStore';
+import LabPage from '../pages/Lab';
 
 import AuthPage from '../pages/Auth';
 import DashboardPage from '../pages/Dashboard';
@@ -16,7 +17,10 @@ const AppRouter = () => {
     <Routes>
       {/* Приватные маршруты, доступные только авторизованным пользователям */}
       {isAuth && (
+        <>
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/lab" element={<LabPage />} />
+        </>
       )}
 
       {/* Публичные маршруты, доступные всем */}

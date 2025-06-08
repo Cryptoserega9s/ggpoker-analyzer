@@ -3,7 +3,9 @@ const router = new Router();
 const analyticsController = require('../controllers/analyticsController');
 const authMiddleware = require('../middleware/authMiddleware');
 
-// Защищаем роут, чтобы каждый пользователь видел только свою статистику
+// Старый роут
 router.get('/main-stats', authMiddleware, analyticsController.getMainStats);
+// --- НОВЫЙ РОУТ ---
+router.get('/filtered-stats', authMiddleware, analyticsController.getFilteredStats);
 
 module.exports = router;
