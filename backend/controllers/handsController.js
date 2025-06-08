@@ -1,34 +1,58 @@
 const { PlayedHand } = require('../models/models');
 const handParser = require('../services/hand-parser');
+// --- НОВОЕ: Импортируем библиотеку для работы с ZIP ---
+const JSZip = require('jszip');
 
 class HandsController {
     async upload(req, res) {
         try {
-            // req.file создается библиотекой multer
             if (!req.file) {
                 return res.status(400).json({ message: 'Файл не был загружен' });
             }
             
-            // Получаем содержимое файла в виде строки
-            const fileContent = req.file.buffer.toString('utf-8');
+            // --- НОВАЯ ЛОГИКА: РАСПАКОВКА ZIP-АРХИВА ---
+            console.log('Получен файл, начинаю распаковку...');
+            const zip = await JSZip.loadAsync(req.file.buffer);
+            let combinedHistory = '';
+
+            // Асинхронно проходим по каждому файлу в архиве
+            const promises = [];
+            zip.forEach((relativePath, zipEntry) => {
+                // Обрабатываем только .txt файлы
+                if (zipEntry.name.endsWith('.txt')) {
+                    promises.push(
+                        zipEntry.async('string').then(content => {
+                            combinedHistory += content + '\n';
+                        })
+                    );
+                }
+            });
             
-            // Используем наш готовый парсер
-            const parsedData = handParser.parseFile(fileContent);
+            // Дожидаемся, пока все файлы будут прочитаны
+            await Promise.all(promises);
+
+            if (combinedHistory.length === 0) {
+                return res.status(400).json({ message: 'В архиве не найдено .txt файлов с историей.' });
+            }
+            // --- КОНЕЦ НОВОЙ ЛОГИКИ ---
             
-            // Добавляем userId к каждой раздаче
+            // Дальше все как и было: передаем одну большую строку в парсер
+            const parsedData = handParser.parseFile(combinedHistory);
+            
+            if (parsedData.length === 0) {
+                return res.status(400).json({ message: 'Не удалось распознать раздачи в файлах.' });
+            }
+
             const dataToSave = parsedData.map(hand => ({
                 ...hand,
-                userId: req.user.id // req.user добавляется в authMiddleware
+                userId: req.user.id
             }));
 
-            // Сохраняем все раздачи в базу ОДНИМ запросом.
-            // bulkCreate - очень эффективный метод для массовой вставки.
-            // updateOnDuplicate - указывает, какие поля обновлять, если такая раздача уже есть.
             await PlayedHand.bulkCreate(dataToSave, {
-                updateOnDuplicate: ["net_result_bb"] // Пример, можно указать другие поля
+                updateOnDuplicate: ["net_result_bb"] 
             });
 
-            return res.json({ message: `Файл успешно обработан. Добавлено/обновлено ${parsedData.length} раздач.` });
+            return res.json({ message: `Архив успешно обработан. Добавлено/обновлено ${parsedData.length} раздач.` });
 
         } catch (e) {
             console.error('Ошибка при загрузке файла:', e);
