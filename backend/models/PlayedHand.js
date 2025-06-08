@@ -1,9 +1,18 @@
 const sequelize = require('../db');
 const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 const PlayedHand = sequelize.define('played_hand', {
     // --- Ключи ---
     // user_id будет добавлен автоматически через ассоциацию
+    userId: { 
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        references: { // --- ВОТ ВАЖНАЯ ЧАСТЬ ---
+            model: User,
+            key: 'id'
+        }
+    },
     tournament_id: { type: DataTypes.BIGINT, primaryKey: true },
     hand_id: { type: DataTypes.STRING, primaryKey: true },
 
