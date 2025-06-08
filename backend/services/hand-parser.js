@@ -1,14 +1,3 @@
-const POSITION_MAP = {
-    9: ['UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
-    8: ['UTG', 'UTG+1', 'MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
-    7: ['UTG', 'MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
-    6: ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'],
-    5: ['BTN', 'SB', 'BB', 'UTG', 'CO'].reverse(),
-    4: ['BTN', 'SB', 'BB', 'UTG'].reverse(),
-    3: ['BTN', 'SB', 'BB'],
-    2: ['SB', 'BB'],
-};
-
 class HandParser {
     parseFile(fileContent) {
         const handHistories = fileContent.split('Poker Hand #').slice(1);
@@ -25,19 +14,20 @@ class HandParser {
     _parseSingleHand(handText) {
         const handInfoMatch = handText.match(/Poker Hand #(?<handId>.*?):.*?Tournament #(?<tournamentId>\d+)?/);
         const dateTimeMatch = handText.match(/\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}/);
-        const blindsMatch = handText.match(/Level\d+\s*\((?<sb>\d+)\/(?<bb>\d+)\)/);
+        const blindsMatch = handText.match(/Level\d+\s*\((?<sb>[\d,]+)\/(?<bb>[\d,]+)\)/);
+
         if (!handInfoMatch || !dateTimeMatch || !blindsMatch) return null;
 
         const handId = handInfoMatch.groups.handId;
         const tournamentId = handInfoMatch.groups.tournamentId || null;
         const playedAt = new Date(dateTimeMatch[0]);
-        const bigBlindSize = parseInt(blindsMatch.groups.bb, 10);
+        const bigBlindSize = parseInt(blindsMatch.groups.bb.replace(/,/g, ''), 10);
         const isFinalTable = handText.includes('9-max');
 
         const tableSetupBlock = handText.split('*** HOLE CARDS ***')[0];
         const playerSeatMatches = [...tableSetupBlock.matchAll(/Seat (?<seatNumber>\d+): (?<playerName>.*?) \((?<stack>[\d,]+) in chips\)/g)];
         const playersCount = playerSeatMatches.length;
-        if (playersCount === 0) return null;
+        if (playersCount < 2) return null;
 
         const heroInfo = playerSeatMatches.find(m => m.groups.playerName === 'Hero');
         if (!heroInfo) return null;
@@ -51,7 +41,7 @@ class HandParser {
         const buttonSeatNumber = parseInt(buttonSeatMatch.groups.buttonSeatNumber, 10);
         
         const activeSeats = playerSeatMatches.map(m => parseInt(m.groups.seatNumber));
-        const heroPosition = this._getPlayerPosition(heroSeatNumber, buttonSeatNumber, activeSeats);
+        const heroPosition = this._getPlayerPosition(heroSeatNumber, buttonSeatNumber, activeSeats, handText);
 
         const heroCardsMatch = handText.match(/Dealt to Hero \[(?<cards>.*?)\]/);
         if (!heroCardsMatch) return null;
@@ -171,18 +161,12 @@ class HandParser {
         };
     }
     
-    _getPlayerPosition(playerSeat, buttonSeat, activeSeats) {
+        _getPlayerPosition(playerSeat, buttonSeat, activeSeats) {
         const playersCount = activeSeats.length;
-        if (!POSITION_MAP[playersCount]) return 'UNKNOWN';
-        if (playersCount === 2) return playerSeat === buttonSeat ? 'SB' : 'BB';
 
-        const sortedSeats = [...activeSeats].sort((a, b) => a - b);
-        const buttonIndex = sortedSeats.indexOf(buttonSeat);
-        const playerIndex = sortedSeats.indexOf(playerSeat);
-
-        const relativeIndex = (playerIndex - buttonIndex + playersCount) % playersCount;
-        
-        const offsetMap = {
+        // Определяем карту позиций в зависимости от количества игроков
+        // Названия стандартные, до 5 символов максимум (UTG+1)
+        const positionNames = {
             9: ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO'],
             8: ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'MP', 'HJ', 'CO'],
             7: ['BTN', 'SB', 'BB', 'UTG', 'MP', 'HJ', 'CO'],
@@ -190,10 +174,32 @@ class HandParser {
             5: ['BTN', 'SB', 'BB', 'UTG', 'CO'],
             4: ['BTN', 'SB', 'BB', 'UTG'],
             3: ['BTN', 'SB', 'BB'],
-        };
+            2: ['SB', 'BB'], // В HU баттон всегда является SB
+        }[playersCount];
         
-        const currentOffsetMap = offsetMap[playersCount];
-        return currentOffsetMap ? currentOffsetMap[relativeIndex] : 'UNKNOWN';
+        // Если для такого стола нет карты, возвращаем UNKNOWN
+        if (!positionNames) {
+            return 'UNKN';
+        }
+
+        // В HU у баттона специальная логика
+        if (playersCount === 2) {
+            return playerSeat === buttonSeat ? 'SB' : 'BB';
+        }
+
+        // Сортируем активные места, чтобы получить порядок хода
+        const sortedSeats = [...activeSeats].sort((a, b) => a - b);
+
+        // Находим индекс баттона и игрока в этом отсортированном массиве
+        const buttonIndex = sortedSeats.indexOf(buttonSeat);
+        const playerIndex = sortedSeats.indexOf(playerSeat);
+
+        // Вычисляем "смещение" игрока относительно баттона по часовой стрелке
+        // 0 = BTN, 1 = SB, 2 = BB, 3 = UTG, и т.д.
+        const relativeIndex = (playerIndex - buttonIndex + playersCount) % playersCount;
+        
+        // Возвращаем название позиции из нашей карты
+        return positionNames[relativeIndex];
     }
     
     _normalizeHand(card1, card2) {

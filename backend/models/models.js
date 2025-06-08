@@ -1,8 +1,9 @@
 const User = require('./User');
-// В будущем здесь будут другие модели: const PlayedHand = require('./PlayedHand') и т.д.
+// --- НОВОЕ: Импортируем новую модель ---
+const PlayedHand = require('./PlayedHand');
 
 // Мы экспортируем все модели в одном объекте для удобства
 module.exports = {
     User,
-    // PlayedHand,
+    PlayedHand, // --- И ДОБАВЛЯЕМ ЕЕ В ЭКСПОРТ ---
 };
