@@ -1,4 +1,3 @@
-// ... (POSITION_MAP остается без изменений) ...
 const POSITION_MAP = {
     9: ['UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
     8: ['UTG', 'UTG+1', 'MP', 'HJ', 'CO', 'BTN', 'SB', 'BB'],
@@ -10,12 +9,10 @@ const POSITION_MAP = {
     2: ['SB', 'BB'],
 };
 
-
 class HandParser {
     parseFile(fileContent) {
         const handHistories = fileContent.split('Poker Hand #').slice(1);
         const parsedHands = [];
-
         for (const historyText of handHistories) {
             const singleHandData = this._parseSingleHand('Poker Hand #' + historyText);
             if (singleHandData) {
@@ -26,75 +23,165 @@ class HandParser {
     }
 
     _parseSingleHand(handText) {
-        // --- 1. БАЗОВАЯ ИНФОРМАЦИЯ ---
         const handInfoMatch = handText.match(/Poker Hand #(?<handId>.*?):.*?Tournament #(?<tournamentId>\d+)?/);
         const dateTimeMatch = handText.match(/\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}/);
-        
-        // --- НОВАЯ ЛОГИКА: БЛАЙНДЫ И СТАДИЯ ТУРНИРА ---
-        const blindsMatch = handText.match(/Level\d+\((?<sb>\d+)\/(?<bb>\d+)\)/);
-        const isFinalTable = handText.includes('9-max');
-
+        const blindsMatch = handText.match(/Level\d+\s*\((?<sb>\d+)\/(?<bb>\d+)\)/);
         if (!handInfoMatch || !dateTimeMatch || !blindsMatch) return null;
 
         const handId = handInfoMatch.groups.handId;
         const tournamentId = handInfoMatch.groups.tournamentId || null;
         const playedAt = new Date(dateTimeMatch[0]);
         const bigBlindSize = parseInt(blindsMatch.groups.bb, 10);
-        
-        // --- 2. ИНФОРМАЦИЯ О ГЕРОЕ ---
-        const heroCardsMatch = handText.match(/Dealt to Hero \[(?<cards>.*?)\]/);
-        if (!heroCardsMatch) return null;
+        const isFinalTable = handText.includes('9-max');
 
         const tableSetupBlock = handText.split('*** HOLE CARDS ***')[0];
-        const playerSeatMatches = [...tableSetupBlock.matchAll(/Seat (?<seatNumber>\d+): .*? \(/g)];
+        const playerSeatMatches = [...tableSetupBlock.matchAll(/Seat (?<seatNumber>\d+): (?<playerName>.*?) \((?<stack>[\d,]+) in chips\)/g)];
         const playersCount = playerSeatMatches.length;
         if (playersCount === 0) return null;
-        
-        const heroSeatMatch = tableSetupBlock.match(/Seat \d+: Hero \((?<stack>[\d,]+) in chips\)/);
-        if (!heroSeatMatch) return null;
-        const heroStackInChips = parseInt(heroSeatMatch.groups.stack.replace(/,/g, ''), 10);
-        // Считаем стек в больших блайндах
+
+        const heroInfo = playerSeatMatches.find(m => m.groups.playerName === 'Hero');
+        if (!heroInfo) return null;
+
+        const heroStackInChips = parseInt(heroInfo.groups.stack.replace(/,/g, ''), 10);
         const heroStackInBB = parseFloat((heroStackInChips / bigBlindSize).toFixed(2));
+        const heroSeatNumber = parseInt(heroInfo.groups.seatNumber, 10);
 
-        const heroSeatNumber = parseInt(tableSetupBlock.match(/Seat (?<seatNumber>\d+): Hero/)[1], 10);
-        const buttonSeatNumber = parseInt(tableSetupBlock.match(/Seat #(?<seatNumber>\d+) is the button/)[1], 10);
+        const buttonSeatMatch = tableSetupBlock.match(/Seat #(?<seatNumber>\d+) is the button/);
+        if (!buttonSeatMatch) return null;
+        const buttonSeatNumber = parseInt(buttonSeatMatch.groups.buttonSeatNumber, 10);
+        
         const activeSeats = playerSeatMatches.map(m => parseInt(m.groups.seatNumber));
-        
         const heroPosition = this._getPlayerPosition(heroSeatNumber, buttonSeatNumber, activeSeats);
-        const rawCards = heroCardsMatch.groups.cards.split(' ');
-        const startingHand = this._normalizeHand(rawCards[0], rawCards[1]);
-        
-        // --- 3. АНАЛИЗ ДЕЙСТВИЙ ---
-        const actionsBlock = handText.split('*** HOLE CARDS ***')[1].split('*** FLOP ***')[0];
-        const preflopActions = this._getPreflopActions(actionsBlock, 'Hero');
 
-        // --- 4. СБОРКА РЕЗУЛЬТАТА ---
-        const parsedData = {
+        const heroCardsMatch = handText.match(/Dealt to Hero \[(?<cards>.*?)\]/);
+        if (!heroCardsMatch) return null;
+        const startingHand = this._normalizeHand(heroCardsMatch.groups.cards.split(' ')[0], heroCardsMatch.groups.cards.split(' ')[1]);
+
+        const actionFlags = this._getActionFlags(handText, 'Hero');
+        const outcome = this._getOutcome(handText, 'Hero', bigBlindSize);
+        
+        return {
             hand_id: handId,
             tournament_id: tournamentId,
             played_at: playedAt,
-            is_final_table: isFinalTable, // Флаг финального стола
-            big_blind_size: bigBlindSize, // Размер ББ
+            big_blind_size: bigBlindSize,
             hero_position: heroPosition,
             starting_hand: startingHand,
+            hero_stack_in_bb: heroStackInBB,
             players_at_table: playersCount,
-            hero_stack_in_chips: heroStackInChips, // Стек в фишках
-            hero_stack_in_bb: heroStackInBB, // Стек в ББ
-            hero_vpip: preflopActions.vpip,
-            hero_pfr: preflopActions.pfr,
+            is_final_table: isFinalTable,
+            ...actionFlags,
+            ...outcome,
         };
-        return parsedData;
     }
 
+    _getActionFlags(handText, heroName) {
+        const preflopBlock = handText.split('*** HOLE CARDS ***')[1].split('*** FLOP ***')[0];
+        const preflopActions = preflopBlock.trim().split('\n').filter(line => !line.startsWith('Dealt to'));
+    
+        const result = {
+            hero_vpip: false,
+            hero_pfr: false,
+            hero_limped: false,
+            hero_cold_called: false,
+            hero_made_3bet: false,
+            hero_faced_3bet: false,
+            hero_called_3bet: false,
+            hero_folded_to_3bet: false,
+            hero_made_4bet: false,
+            hero_made_squeeze: false,
+            hero_attempted_steal: false,
+            saw_flop: handText.includes('*** FLOP ***'),
+            saw_turn: handText.includes('*** TURN ***'),
+            saw_river: handText.includes('*** RIVER ***'),
+        };
+    
+        let raisesCount = 0;
+        let limpersCount = 0;
+        let callersCount = 0;
+        let heroFirstAction = true;
+    
+        for (const action of preflopActions) {
+            const isHeroAction = action.startsWith(heroName + ':');
+    
+            if (action.includes('raises')) {
+                if (isHeroAction) {
+                    if (raisesCount === 1) result.hero_made_3bet = true;
+                    if (raisesCount >= 2) result.hero_made_4bet = true;
+                } else {
+                    if (raisesCount === 1) result.hero_faced_3bet = true;
+                }
+                raisesCount++;
+            } else if (action.includes('calls')) {
+                if (raisesCount === 0) limpersCount++;
+                callersCount++;
+            }
+    
+            if (isHeroAction) {
+                if (action.includes('raises') || action.includes('calls')) result.hero_vpip = true;
+    
+                if (heroFirstAction) {
+                    if (action.includes('raises')) {
+                        result.hero_pfr = true;
+                        if (raisesCount === 2 && callersCount > 0) result.hero_made_squeeze = true;
+                    } else if (action.includes('calls')) {
+                        if (raisesCount === 0) result.hero_limped = true;
+                        if (raisesCount === 1) result.hero_cold_called = true;
+                        if (raisesCount === 2) result.hero_called_3bet = true;
+                    }
+                    heroFirstAction = false;
+                }
+            }
+        }
+        
+        const heroFolded = preflopActions.some(action => action.startsWith(heroName + ': folds'));
+        if (result.hero_faced_3bet && heroFolded && !result.hero_called_3bet && !result.hero_made_4bet) {
+            result.hero_folded_to_3bet = true;
+        }
+    
+        return result;
+    }
+
+    _getOutcome(handText, heroName, bbSize) {
+        let totalInvested = 0;
+        const heroActions = handText.split('\n').filter(line => line.startsWith(heroName + ':'));
+        for (const action of heroActions) {
+            const betMatch = action.match(/(?:posts|bets|calls|raises).*? ([\d,]+)/);
+            if (betMatch) {
+                totalInvested += parseInt(betMatch[1].replace(/,/g, ''), 10);
+            }
+        }
+    
+        let winnings = 0;
+        const summaryBlock = handText.split('*** SUMMARY ***')[1] || '';
+        const heroSummaryLine = summaryBlock.split('\n').find(line => line.includes(heroName));
+    
+        if (heroSummaryLine) {
+            const collectedMatch = heroSummaryLine.match(/(?:won|collected) \(([\d,]+)\)/);
+            if (collectedMatch) {
+                winnings = parseInt(collectedMatch[1].replace(/,/g, ''), 10);
+            }
+        }
+    
+        const netResultChips = winnings - totalInvested;
+        return {
+            went_to_showdown: handText.includes('*** SHOW DOWN ***'),
+            won_hand: winnings > 0,
+            net_result_bb: parseFloat((netResultChips / bbSize).toFixed(2)),
+        };
+    }
+    
     _getPlayerPosition(playerSeat, buttonSeat, activeSeats) {
-        // ... (этот метод остается без изменений) ...
         const playersCount = activeSeats.length;
         if (!POSITION_MAP[playersCount]) return 'UNKNOWN';
         if (playersCount === 2) return playerSeat === buttonSeat ? 'SB' : 'BB';
+
         const sortedSeats = [...activeSeats].sort((a, b) => a - b);
         const buttonIndex = sortedSeats.indexOf(buttonSeat);
         const playerIndex = sortedSeats.indexOf(playerSeat);
+
         const relativeIndex = (playerIndex - buttonIndex + playersCount) % playersCount;
+        
         const offsetMap = {
             9: ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO'],
             8: ['BTN', 'SB', 'BB', 'UTG', 'UTG+1', 'MP', 'HJ', 'CO'],
@@ -104,12 +191,12 @@ class HandParser {
             4: ['BTN', 'SB', 'BB', 'UTG'],
             3: ['BTN', 'SB', 'BB'],
         };
+        
         const currentOffsetMap = offsetMap[playersCount];
         return currentOffsetMap ? currentOffsetMap[relativeIndex] : 'UNKNOWN';
     }
     
     _normalizeHand(card1, card2) {
-        // ... (этот метод остается без изменений) ...
         const ranks = 'AKQJT98765432';
         const r1 = card1.charAt(0);
         const r2 = card2.charAt(0);
@@ -118,24 +205,6 @@ class HandParser {
         const suited = s1 === s2 ? 's' : 'o';
         if (r1 === r2) return r1 + r2;
         return ranks.indexOf(r1) < ranks.indexOf(r2) ? r1 + r2 + suited : r2 + r1 + suited;
-    }
-
-    _getPreflopActions(actionsBlock, heroName) {
-        // ... (этот метод остается без изменений) ...
-        const actions = actionsBlock.trim().split('\n').map(a => a.trim());
-        let vpip = false;
-        let pfr = false;
-        let firstActionDone = false;
-        for (const action of actions) {
-            if (action.startsWith(heroName)) {
-                if (!firstActionDone) {
-                    if (action.includes('raises')) pfr = true;
-                    firstActionDone = true;
-                }
-                if (action.includes('raises') || action.includes('calls') || action.includes('bets')) vpip = true;
-            }
-        }
-        return { vpip, pfr };
     }
 }
 
